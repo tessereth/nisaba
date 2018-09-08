@@ -1,3 +1,4 @@
+require 'git_diff'
 require 'json'
 require 'jwt'
 require 'logger'
@@ -96,9 +97,9 @@ module Nisaba
   class RequestContext
     extend Forwardable
 
-    attr_reader :event, :payload, :config, :client
+    attr_reader :event, :payload, :client
 
-    def_delegators :config, :logger
+    def_delegators :@config, :logger
 
     def initialize(event:, payload:, config:)
       @event = event
@@ -123,14 +124,35 @@ module Nisaba
       jwt_payload = {
         iat: Time.now.to_i,
         exp: Time.now.to_i + (10 * 60),
-        iss: config.app_id
+        iss: @config.app_id
       }
-      jwt = JWT.encode(jwt_payload, config.app_private_key, 'RS256')
+      jwt = JWT.encode(jwt_payload, @config.app_private_key, 'RS256')
       client = Octokit::Client.new(bearer_token: jwt)
 
       installation_id = payload.dig(:installation, :id)
-      installation_token = client.create_app_installation_access_token(installation_id)[:token]
+      installation_token = client.create_app_installation_access_token(installation_id, accept: 'application/vnd.github.machine-man-preview+json')[:token]
       Octokit::Client.new(bearer_token: installation_token)
+    end
+
+    def raw_diff
+      @_raw_diff ||= @client.pull_request(repo, pr_number, accept: 'application/vnd.github.v3.diff')
+    end
+
+    def diff
+      @_diff ||= GitDiff.from_string(raw_diff)
+    end
+
+    # For renamed files, includes both old and new names
+    def files
+      diff.files.flat_map { |f| [f.a_path, f.b_path] }.uniq
+    end
+
+    def file?(filename)
+      if filename.is_a?(Regexp)
+        files.any? { |f| f.match?(filename) }
+      else
+        files.any? { |f| f == filename }
+      end
     end
   end
 
@@ -142,33 +164,52 @@ module Nisaba
         @name = name
         @block = block
       end
+
+      def handle(context)
+        return unless filter(context)
+        perform(context)
+      end
     end
 
     class Label < Base
-      def handle(context)
-        return unless context.event == 'pull_request'
-        # avoid infinite loops
-        return if %w[labeled unlabeled].include?(context.payload[:action])
+      def filter(context)
+        context.event == 'pull_request' && !%w[labeled unlabeled].include?(context.payload[:action])
+      end
+
+      def perform(context)
         context.logger.info("Reconciling label '#{name}' for '#{context}'")
+
+        label = label_name(context)
+        return unless label
+        if block.call(context)
+          context.client.add_labels_to_an_issue(context.repo, context.pr_number, [label])
+          context.logger.info("Added label '#{label}'")
+        else
+          begin
+            context.client.remove_label(context.repo, context.pr_number, label)
+            context.logger.info("Removed label '#{label}'")
+          rescue Octokit::NotFound
+            # label isn't there so nothing to remove
+          end
+        end
+      end
+
+      def label_name(context)
         # TODO: consider search api: https://developer.github.com/v3/search/#search-labels
         # TODO: pagination
-        all_labels = context.client.labels(context.repo)
-        matching_labels = all_labels.select { |label| label[:name].include?(name) }
+        # TODO: consider caching
+        all_labels = context.client.labels(context. repo).map(&:name)
+        matching_labels = all_labels.select { |label| label.include?(name) }
 
         if matching_labels.empty?
           context.logger.error("Label '#{name}' not found in repository #{context.repo}: found #{all_labels}")
           return
         elsif matching_labels.count > 1
-          context.logger.error("Label '#{name}' is ambiguous repository #{context.repo}: matches #{matching_labels}")
+          context.logger.error("Label '#{name}' is ambiguous in repository #{context.repo}: matches #{matching_labels}")
           return
         end
 
-        label = matching_labels.first[:name]
-        if block.call(context)
-          context.client.add_labels_to_an_issue(context.repo, context.pr_number, [label])
-        else
-          context.client.remove_label(context.repo, context.pr_number, label)
-        end
+        matching_labels.first
       end
     end
 
