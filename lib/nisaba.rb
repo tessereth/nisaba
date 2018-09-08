@@ -71,14 +71,18 @@ module Nisaba
       handlers << Handler::Label.new(name, block)
     end
 
-    def comment(name, &block)
+    def comment(name)
       logger.debug("Managing comment '#{name}'")
-      handlers << Handler::Comment.new(name, block)
+      config = Comment.new
+      yield config
+      handlers << Handler::Comment.new(name, config)
     end
 
     def review(name, &block)
       logger.debug("Managing review '#{name}'")
-      handlers << Handler::Review.new(name, block)
+      config = Review.new
+      yield config
+      handlers << Handler::Review.new(name, config)
     end
 
     def validate!
@@ -90,6 +94,36 @@ module Nisaba
       end
       if app_private_key.nil?
         raise ConfigurationError, 'app_private_key must be set'
+      end
+    end
+
+    class Comment
+      attr_reader :when_block, :body_block
+      attr_accessor :update_strategy
+
+      def when(&block)
+        @when_block = block
+      end
+
+      def body(&block)
+        @body_block = block
+      end
+    end
+
+    class Review
+      attr_reader :when_block, :body_block, :line_comments_block
+      attr_accessor :type
+
+      def when(&block)
+        @when_block = block
+      end
+
+      def body(&block)
+        @body_block = block
+      end
+
+      def line_comments(&block)
+        @line_comments_block = block
       end
     end
   end
@@ -158,6 +192,19 @@ module Nisaba
 
   module Handler
     class Base
+      def handle(context)
+        return unless filter(context)
+        perform(context)
+      end
+
+      def filter(_context)
+        true
+      end
+
+      def perform(_context); end
+    end
+
+    class Label < Base
       attr_reader :name, :block
 
       def initialize(name, block)
@@ -165,13 +212,6 @@ module Nisaba
         @block = block
       end
 
-      def handle(context)
-        return unless filter(context)
-        perform(context)
-      end
-    end
-
-    class Label < Base
       def filter(context)
         context.event == 'pull_request' && !%w[labeled unlabeled].include?(context.payload[:action])
       end
@@ -181,15 +221,24 @@ module Nisaba
 
         label = label_name(context)
         return unless label
+        has_label = context.payload.dig(:pull_request, :labels).map { |x| x[:name] }.include?(label)
         if block.call(context)
-          context.client.add_labels_to_an_issue(context.repo, context.pr_number, [label])
-          context.logger.info("Added label '#{label}'")
+          if has_label
+            context.logger.info("Label '#{label}' already applied")
+          else
+            context.client.add_labels_to_an_issue(context.repo, context.pr_number, [label])
+            context.logger.info("Added label '#{label}'")
+          end
         else
-          begin
-            context.client.remove_label(context.repo, context.pr_number, label)
-            context.logger.info("Removed label '#{label}'")
-          rescue Octokit::NotFound
-            # label isn't there so nothing to remove
+          if has_label
+            begin
+              context.client.remove_label(context.repo, context.pr_number, label)
+              context.logger.info("Removed label '#{label}'")
+            rescue Octokit::NotFound
+              # label isn't there, presumably because someone has bad/good timing deleting it
+            end
+          else
+            context.logger.info("Label '#{label}' already not applied")
           end
         end
       end
@@ -214,14 +263,71 @@ module Nisaba
     end
 
     class Comment < Base
-      def handle(context)
+      attr_reader :name, :config
+
+      def initialize(name, config)
+        @name = name
+        @config = config
+      end
+
+      def filter(context)
+        context.event == 'pull_request'
+      end
+
+      def perform(context)
         context.logger.info("Reconciling comment '#{name}' for '#{context}'")
+
+        current = current_comment(context)
+        should_have_comment = config.when_block.call(context)
+
+        if should_have_comment
+          body = "#{config.body_block.call(context)}\n\n&nbsp;\n#{id_string}"
+          if body == current&.body
+            context.logger.debug("Comment remains unchanged")
+            return
+          end
+          if config.update_strategy == :replace && current
+            context.logger.debug("Deleting old comment before creating new comment")
+            context.client.delete_comment(context.repo, current.id)
+            current = nil
+          end
+          if current
+            context.logger.debug("Updating comment")
+            context.client.update_comment(context.repo, current.id, body)
+          else
+            context.logger.debug("Adding comment")
+            context.client.add_comment(context.repo, context.pr_number, body)
+          end
+        elsif current
+          context.logger.debug("Deleting old comment")
+          context.client.delete_comment(context.repo, current.id)
+        else
+          context.logger.debug("Comment should not apply and does not exist")
+        end
+      end
+
+      def current_comment(context)
+        # TODO: pagination
+        comments = context.client.issue_comments(context.repo, context.pr_number)
+        comments.each do |comment|
+          if comment.body.include?(id_string)
+            return comment
+          end
+        end
+        nil
+      end
+
+      def id_string
+        "_nisaba: '#{name}'_"
       end
     end
 
     class Review < Base
-      def handle(context)
-        context.logger.info("Reconciling review '#{name}' for '#{context}'")
+      attr_reader :name, :config
+
+      def initialize(name, config)
+        @name = name
+        @config = config
       end
     end
   end
