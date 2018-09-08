@@ -101,6 +101,10 @@ module Nisaba
       attr_reader :when_block, :body_block
       attr_accessor :update_strategy
 
+      def initialize
+        @update_strategy = :update
+      end
+
       def when(&block)
         @when_block = block
       end
@@ -112,7 +116,12 @@ module Nisaba
 
     class Review
       attr_reader :when_block, :body_block, :line_comments_block
-      attr_accessor :type
+      attr_accessor :type, :update_strategy
+
+      def initialize
+        @type = :comment
+        @update_strategy = :never
+      end
 
       def when(&block)
         @when_block = block
@@ -182,10 +191,37 @@ module Nisaba
     end
 
     def file?(filename)
-      if filename.is_a?(Regexp)
-        files.any? { |f| f.match?(filename) }
+      files.any? { |f| match_filter?(f, filename) }
+    end
+
+    def each_line(file_filter: nil)
+      return enum_for(:each_line, file_filter: file_filter) unless block_given?
+
+      diff.files.each do |file|
+        next if file_filter && !match_filter?(file.a_path, file_filter) && !match_filter?(file.b_path, file_filter)
+
+        # position is the position as defined by github line comment api:
+        #
+        # https://developer.github.com/v3/pulls/reviews/#create-a-pull-request-review
+        position = 1
+        file.hunks.each do |hunk|
+          hunk.lines.each do |line|
+            yield file, line, position
+            position += 1
+          end
+          # Add one for the hunk definition line
+          position += 1
+        end
+      end
+    end
+
+    private
+
+    def match_filter?(to_match, filter)
+      if filter.is_a?(Regexp)
+        filter.match?(to_match)
       else
-        files.any? { |f| f == filename }
+        filter == to_match
       end
     end
   end
@@ -286,14 +322,20 @@ module Nisaba
             context.logger.debug("Comment remains unchanged")
             return
           end
-          if config.update_strategy == :replace && current
-            context.logger.debug("Deleting old comment before creating new comment")
-            context.client.delete_comment(context.repo, current.id)
-            current = nil
-          end
           if current
-            context.logger.debug("Updating comment")
-            context.client.update_comment(context.repo, current.id, body)
+            case config.update_strategy
+            when :update
+              context.logger.debug("Updating comment")
+              context.client.update_comment(context.repo, current.id, body)
+            when :replace
+              context.logger.debug("Deleting old comment and adding new")
+              context.client.delete_comment(context.repo, current.id)
+              context.client.add_comment(context.repo, context.pr_number, body)
+            when :never
+              context.logger.debug("Ignoring change due to 'never' update strategy")
+            else
+              config.logger.error("Unknown update strategy: #{config.update_strategy}")
+            end
           else
             context.logger.debug("Adding comment")
             context.client.add_comment(context.repo, context.pr_number, body)
@@ -328,6 +370,55 @@ module Nisaba
       def initialize(name, config)
         @name = name
         @config = config
+      end
+
+      def filter(context)
+        context.event == 'pull_request'
+      end
+
+      def perform(context)
+        context.logger.info("Reconciling review '#{name}' for '#{context}'")
+
+        current = current_review(context)
+
+        if current
+          context.logger.info("Skipping as review already exists and updating is not supported")
+          return
+        end
+
+        should_have_review = config.when_block.call(context)
+
+        if should_have_review
+          params = {
+            commit_id: context.payload.dig(:pull_request, :head, :sha),
+            body: make_body(context),
+            event: config.type.to_s.upcase,
+            comments: config.line_comments_block.call(context)
+          }
+          context.logger.debug("Adding review")
+          context.client.create_pull_request_review(context.repo, context.pr_number, params)
+        else
+          context.logger.debug("Review should not apply and does not exist")
+        end
+      end
+
+      def current_review(context)
+        # TODO: pagination
+        reviews = context.client.pull_request_reviews(context.repo, context.pr_number)
+        reviews.each do |review|
+          if review.body.include?(id_string)
+            return review
+          end
+        end
+        nil
+      end
+
+      def id_string
+        "_nisaba: '#{name}'_"
+      end
+
+      def make_body(context)
+        [config.body_block.call(context), id_string].compact.join("\n\n&nbsp;\n")
       end
     end
   end
