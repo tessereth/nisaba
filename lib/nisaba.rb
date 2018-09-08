@@ -12,11 +12,12 @@ module Nisaba
     def self.configure
       @config ||= Configuration.new
       yield @config
+      @config.validate!
     end
 
-    def self.handle(payload)
+    def self.handle(event, payload)
       @config.handlers.each do |handler|
-        handler.handle(payload)
+        handler.handle(event, payload)
       end
     end
 
@@ -30,18 +31,21 @@ module Nisaba
       Sinatra::Application.post '/webhook' do
         request.body.rewind
         payload_body = request.body.read
-        halt 401, "Signatures didn't match!" unless verify_signature(payload_body)
+        unless Nisaba::Application.verify_signature(payload_body, request.env['HTTP_X_HUB_SIGNATURE'])
+          halt 401, "Signatures didn't match!"
+        end
 
-        payload = JSON.parse(params[:payload])
-        Nisaba::Application.handle(payload)
+        payload = JSON.parse(payload_body)
+        Nisaba::Application.handle(request.env['HTTP_X_GITHUB_EVENT'], payload)
+        'OK'
       end
 
       Sinatra::Application.run!
     end
 
-    def self.verify_signature(payload_body)
-      signature = 'sha1=' + OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha1'), @config.webhook_secret, payload_body)
-      Rack::Utils.secure_compare(signature, request.env['HTTP_X_HUB_SIGNATURE'])
+    def self.verify_signature(payload_body, signature)
+      comparison_signature = 'sha1=' + OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha1'), @config.webhook_secret, payload_body)
+      Rack::Utils.secure_compare(signature, comparison_signature)
     end
   end
 
@@ -66,6 +70,12 @@ module Nisaba
       puts "Managing review '#{name}'"
       handlers << Handler::Review.new(name, block)
     end
+
+    def validate!
+      if webhook_secret.nil? || webhook_secret.empty?
+        raise ConfigurationError, 'webhook_secret must be set'
+      end
+    end
   end
 
   module Handler
@@ -79,21 +89,23 @@ module Nisaba
     end
 
     class Label < Base
-      def handle(payload)
-        puts "Reconciling label '#{name}' for payload #{payload}"
+      def handle(event, payload)
+        puts "Reconciling label '#{name}' for '#{event}' event with payload #{payload.keys}"
       end
     end
 
     class Comment < Base
-      def handle(payload)
-        puts "Reconciling comment '#{name}' for payload #{payload}"
+      def handle(event, payload)
+        puts "Reconciling comment '#{name}' for '#{event}' event with payload #{payload.keys}"
       end
     end
 
     class Review < Base
-      def handle(payload)
-        puts "Reconciling review '#{name}' for payload #{payload}"
+      def handle(event, payload)
+        puts "Reconciling review '#{name}' for '#{event}' event with payload #{payload.keys}"
       end
     end
   end
+
+  class ConfigurationError < StandardError; end
 end
