@@ -31,6 +31,7 @@ module Nisaba
     end
 
     def make_client
+      # TODO: don't regenerate every request
       jwt_payload = {
         iat: Time.now.to_i,
         exp: Time.now.to_i + (10 * 60),
