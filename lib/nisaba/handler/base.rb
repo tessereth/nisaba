@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module Nisaba
   module Handler
     class Base

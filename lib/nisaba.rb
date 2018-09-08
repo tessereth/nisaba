@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'nisaba/application'
 require 'nisaba/configuration'
 require 'nisaba/errors'

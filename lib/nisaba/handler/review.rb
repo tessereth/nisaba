@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module Nisaba
   module Handler
     class Review < Base
@@ -18,7 +20,7 @@ module Nisaba
         current = current_review(context)
 
         if current
-          context.logger.info("Skipping as review already exists and updating is not supported")
+          context.logger.info('Skipping as review already exists and updating is not supported')
           return
         end
 
@@ -31,10 +33,10 @@ module Nisaba
             event: config.type.to_s.upcase,
             comments: config.line_comments_block.call(context)
           }
-          context.logger.debug("Adding review")
+          context.logger.debug('Adding review')
           context.client.create_pull_request_review(context.repo, context.pr_number, params)
         else
-          context.logger.debug("Review should not apply and does not exist")
+          context.logger.debug('Review should not apply and does not exist')
         end
       end
 
@@ -42,9 +44,7 @@ module Nisaba
         # TODO: pagination
         reviews = context.client.pull_request_reviews(context.repo, context.pr_number)
         reviews.each do |review|
-          if review.body.include?(id_string)
-            return review
-          end
+          return review if review.body.include?(id_string)
         end
         nil
       end

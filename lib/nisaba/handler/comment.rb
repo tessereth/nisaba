@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module Nisaba
   module Handler
     class Comment < Base
@@ -17,36 +19,43 @@ module Nisaba
 
         current = current_comment(context)
         should_have_comment = config.when_block.call(context)
+        resolve(context, current, should_have_comment)
+      end
 
+      def resolve(context, current, should_have_comment)
         if should_have_comment
-          body = "#{config.body_block.call(context)}\n\n&nbsp;\n#{id_string}"
-          if body == current&.body
-            context.logger.debug("Comment remains unchanged")
+          new_body = "#{config.body_block.call(context)}\n\n&nbsp;\n#{id_string}"
+          if new_body == current&.body
+            context.logger.debug('Comment remains unchanged')
             return
           end
           if current
-            case config.update_strategy
-            when :update
-              context.logger.debug("Updating comment")
-              context.client.update_comment(context.repo, current.id, body)
-            when :replace
-              context.logger.debug("Deleting old comment and adding new")
-              context.client.delete_comment(context.repo, current.id)
-              context.client.add_comment(context.repo, context.pr_number, body)
-            when :never
-              context.logger.debug("Ignoring change due to 'never' update strategy")
-            else
-              config.logger.error("Unknown update strategy: #{config.update_strategy}")
-            end
+            resolve_update(context, current, new_body)
           else
-            context.logger.debug("Adding comment")
-            context.client.add_comment(context.repo, context.pr_number, body)
+            context.logger.debug('Adding comment')
+            context.client.add_comment(context.repo, context.pr_number, new_body)
           end
         elsif current
-          context.logger.debug("Deleting old comment")
+          context.logger.debug('Deleting old comment')
           context.client.delete_comment(context.repo, current.id)
         else
-          context.logger.debug("Comment should not apply and does not exist")
+          context.logger.debug('Comment should not apply and does not exist')
+        end
+      end
+
+      def resolve_update(context, current, new_body)
+        case config.update_strategy
+        when :update
+          context.logger.debug('Updating comment')
+          context.client.update_comment(context.repo, current.id, new_body)
+        when :replace
+          context.logger.debug('Deleting old comment and adding new')
+          context.client.delete_comment(context.repo, current.id)
+          context.client.add_comment(context.repo, context.pr_number, new_body)
+        when :never
+          context.logger.debug("Ignoring change due to 'never' update strategy")
+        else
+          config.logger.error("Unknown update strategy: #{config.update_strategy}")
         end
       end
 
@@ -54,9 +63,7 @@ module Nisaba
         # TODO: pagination
         comments = context.client.issue_comments(context.repo, context.pr_number)
         comments.each do |comment|
-          if comment.body.include?(id_string)
-            return comment
-          end
+          return comment if comment.body.include?(id_string)
         end
         nil
       end

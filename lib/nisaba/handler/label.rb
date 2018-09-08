@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module Nisaba
   module Handler
     class Label < Base
@@ -18,25 +20,8 @@ module Nisaba
         label = label_name(context)
         return unless label
         has_label = context.payload.dig(:pull_request, :labels).map { |x| x[:name] }.include?(label)
-        if block.call(context)
-          if has_label
-            context.logger.info("Label '#{label}' already applied")
-          else
-            context.client.add_labels_to_an_issue(context.repo, context.pr_number, [label])
-            context.logger.info("Added label '#{label}'")
-          end
-        else
-          if has_label
-            begin
-              context.client.remove_label(context.repo, context.pr_number, label)
-              context.logger.info("Removed label '#{label}'")
-            rescue Octokit::NotFound
-              # label isn't there, presumably because someone has bad/good timing deleting it
-            end
-          else
-            context.logger.info("Label '#{label}' already not applied")
-          end
-        end
+        should_have_label = block.call(context)
+        resolve(context, has_label, should_have_label)
       end
 
       def label_name(context)
@@ -55,6 +40,24 @@ module Nisaba
         end
 
         matching_labels.first
+      end
+
+      def resolve(context, has_label, should_have_label)
+        if should_have_label && has_label
+          context.logger.info("Label '#{label}' already applied")
+        elsif should_have_label && !has_label
+          context.client.add_labels_to_an_issue(context.repo, context.pr_number, [label])
+          context.logger.info("Added label '#{label}'")
+        elsif has_label
+          begin
+            context.client.remove_label(context.repo, context.pr_number, label)
+            context.logger.info("Removed label '#{label}'")
+          rescue Octokit::NotFound # rubocop:disable Lint/HandleExceptions
+            # label isn't there, presumably because someone has bad/good timing deleting it
+          end
+        else
+          context.logger.info("Label '#{label}' already not applied")
+        end
       end
     end
   end

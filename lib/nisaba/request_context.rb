@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'git_diff'
 require 'octokit'
 
@@ -38,7 +40,9 @@ module Nisaba
       client = Octokit::Client.new(bearer_token: jwt)
 
       installation_id = payload.dig(:installation, :id)
-      installation_token = client.create_app_installation_access_token(installation_id, accept: 'application/vnd.github.machine-man-preview+json')[:token]
+      installation_token = client.create_app_installation_access_token(
+        installation_id, accept: 'application/vnd.github.machine-man-preview+json'
+      )[:token]
       Octokit::Client.new(bearer_token: installation_token)
     end
 

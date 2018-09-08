@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'logger'
 
 module Nisaba
@@ -26,7 +28,7 @@ module Nisaba
       handlers << Handler::Comment.new(name, config)
     end
 
-    def review(name, &block)
+    def review(name)
       logger.debug("Managing review '#{name}'")
       config = Review.new
       yield config
@@ -34,15 +36,9 @@ module Nisaba
     end
 
     def validate!
-      if webhook_secret.nil? || webhook_secret.empty?
-        raise ConfigurationError, 'webhook_secret must be set'
-      end
-      if app_id.nil? || app_id.empty?
-        raise ConfigurationError, 'app_id must be set'
-      end
-      if app_private_key.nil?
-        raise ConfigurationError, 'app_private_key must be set'
-      end
+      raise ConfigurationError, 'webhook_secret must be set' if webhook_secret.nil? || webhook_secret.empty?
+      raise ConfigurationError, 'app_id must be set' if app_id.nil? || app_id.empty?
+      raise ConfigurationError, 'app_private_key must be set' if app_private_key.nil?
     end
 
     class Comment
