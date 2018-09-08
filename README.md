@@ -1,8 +1,27 @@
 # Nisaba
 
-Welcome to your new gem! In this directory, you'll find the files you need to be able to package up your Ruby library into a gem. Put your Ruby code in the file `lib/nisaba`. To experiment with that code, run `bin/console` for an interactive prompt.
+Have you ever found yourself making the same comments over and over on pull requests?
+Or you wish you had labels to mark what kind of changes were in a PR but it's too tedious to add them?
+Then you're in the right place!
 
-TODO: Delete this and the text above, and describe your gem
+Nisaba is a gem that lets you write custom rules for adding labels, comments and reviews to pull requests simply and easily.
+For example, to add the `migration` label if a PR has any database migrations (and remove it if they get removed), just run:
+
+```ruby
+require 'nisaba'
+
+Nisaba.configure do |n|
+  n.app_id = ENV['GITHUB_APP_IDENTIFIER']
+  n.app_private_key = ENV['GITHUB_PRIVATE_KEY']
+  n.webhook_secret = ENV['GITHUB_WEBHOOK_SECRET']
+
+  n.label 'migration' do |context|
+    context.file?(%r{db/migrate/.*})
+  end
+end
+
+Nisaba.run!
+```
 
 ## Installation
 
@@ -22,7 +41,18 @@ Or install it yourself as:
 
 ## Usage
 
-TODO: Write usage instructions here
+To use Nisaba, you will to:
+ 
+1. Set up [ngrok](https://ngrok.com/) or [smee](https://smee.io/) or similar so github can send messages to your local machine
+2. [Create a github app](https://developer.github.com/apps/building-github-apps/creating-a-github-app/):
+    * Webhook URL should have `/webhook` as the path (eg `http://aabbccdd.ngrok.io/webhook`)
+    * Webhook secret is required
+    * Enable pull request read/write permissions
+    * Subscribe to pull request events
+    * Install it in the repos you wish to manage
+3. Create your ruby script. Check out [the example](https://github.com/tessereth/nisaba-example) for somewhere to start.
+
+Full API documentation coming soon!
 
 ## Development
 
@@ -32,7 +62,7 @@ To install this gem onto your local machine, run `bundle exec rake install`. To 
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/[USERNAME]/nisaba.
+Bug reports and pull requests are welcome on GitHub at https://github.com/tessereth/nisaba.
 
 ## License
 
